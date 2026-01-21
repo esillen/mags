@@ -1,6 +1,5 @@
 package com.mags
 
-import com.badlogic.gdx.Gdx
 import com.badlogic.gdx.graphics.Color
 import com.badlogic.gdx.graphics.g2d.BitmapFont
 import com.badlogic.gdx.graphics.g2d.SpriteBatch
@@ -35,7 +34,7 @@ class MagazineUI {
             val y = bottomPadding
             val isSelected = index == manager.selectedIndex
             
-            drawMagazine(renderer, magazine, x, y, isSelected, manager)
+            drawMagazine(renderer, magazine, x, y, isSelected)
         }
         
         renderer.end()
@@ -96,8 +95,7 @@ class MagazineUI {
         magazine: Magazine,
         x: Float,
         y: Float,
-        isSelected: Boolean,
-        manager: MagazineManager
+        isSelected: Boolean
     ) {
         val bgColor = if (isSelected) {
             Color(magazine.color.r * 0.8f, magazine.color.g * 0.8f, magazine.color.b * 0.8f, 1f)
@@ -137,14 +135,20 @@ class MagazineUI {
         val keySize = 18f
         renderer.rect(x + magWidth / 2 - keySize / 2, y + magHeight - 22, keySize, keySize)
         
-        if (isSelected && (manager.isReloading || manager.isRearranging)) {
-            val progress = if (manager.isReloading) manager.reloadProgress else manager.rearrangeProgress
-            val barColor = if (manager.isReloading) Color(0.8f, 0.4f, 0.2f, 1f) else Color(0.4f, 0.6f, 0.8f, 1f)
-            
+        // Draw timer bars above magazine for all magazines that have active timers
+        val barY = y + magHeight + 5
+        val barHeight = 5f
+        
+        if (magazine.isReloading) {
             renderer.color = Color(0.1f, 0.1f, 0.1f, 0.8f)
-            renderer.rect(x, y + magHeight + 5, magWidth, 5f)
-            renderer.color = barColor
-            renderer.rect(x, y + magHeight + 5, magWidth * progress, 5f)
+            renderer.rect(x, barY, magWidth, barHeight)
+            renderer.color = Color(0.9f, 0.4f, 0.2f, 1f)
+            renderer.rect(x, barY, magWidth * magazine.reloadProgress, barHeight)
+        } else if (magazine.isRearranging) {
+            renderer.color = Color(0.1f, 0.1f, 0.1f, 0.8f)
+            renderer.rect(x, barY, magWidth, barHeight)
+            renderer.color = Color(0.4f, 0.6f, 0.9f, 1f)
+            renderer.rect(x, barY, magWidth * magazine.rearrangeProgress, barHeight)
         }
     }
     

@@ -28,6 +28,11 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
     private var spawnTimer = 0f
     private val spawnInterval = 2f
     
+    private val minTimeScale = 0.02f
+    private val maxTimeScale = 1f
+    private var currentTimeScale = minTimeScale
+    private val timeScaleLerpSpeed = 12f
+    
     init {
         worldCamera.setToOrtho(false, 1280f, 720f)
         uiCamera.setToOrtho(false, 1280f, 720f)
@@ -35,12 +40,21 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
     }
     
     override fun render(delta: Float) {
-        handleInput(delta)
-        update(delta)
+        val (isMoving, dx, dy) = getMovementInput()
+        val timeKeyPressed = Gdx.input.isKeyPressed(Input.Keys.SPACE)
+        
+        val targetTimeScale = if (isMoving || timeKeyPressed) maxTimeScale else minTimeScale
+        currentTimeScale += (targetTimeScale - currentTimeScale) * timeScaleLerpSpeed * delta
+        currentTimeScale = currentTimeScale.coerceIn(minTimeScale, maxTimeScale)
+        
+        val worldDelta = delta * currentTimeScale
+        
+        handleInput(delta, worldDelta, dx, dy)
+        update(worldDelta)
         draw()
     }
     
-    private fun handleInput(delta: Float) {
+    private fun getMovementInput(): Triple<Boolean, Float, Float> {
         var dx = 0f
         var dy = 0f
         
@@ -49,7 +63,13 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
         if (Gdx.input.isKeyPressed(Input.Keys.A)) dx -= 1f
         if (Gdx.input.isKeyPressed(Input.Keys.D)) dx += 1f
         
-        player.move(dx, dy, delta)
+        val isMoving = dx != 0f || dy != 0f
+        return Triple(isMoving, dx, dy)
+    }
+    
+    private fun handleInput(realDelta: Float, @Suppress("UNUSED_PARAMETER") worldDelta: Float, dx: Float, dy: Float) {
+        // Player moves at real time speed for responsive controls
+        player.move(dx, dy, realDelta)
         
         val mouseScreen = Vector3(Gdx.input.x.toFloat(), Gdx.input.y.toFloat(), 0f)
         worldCamera.unproject(mouseScreen)
@@ -58,21 +78,23 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
         if (Gdx.input.isButtonJustPressed(Input.Buttons.LEFT)) {
             val bulletType = magazineManager.selectedMagazine.peekTop()
             if (bulletType != null && bulletType.behavior == BulletBehavior.BOMB) {
-                if (magazineManager.canAct) {
+                if (magazineManager.selectedMagazine.canShoot) {
                     val bomb = magazineManager.shoot(player.x, player.y, player.aimAngle)
                     if (bomb != null) {
+                        player.triggerMuzzleFlash()
                         applyBombDamage(bomb)
                     }
                 }
             } else {
-                val bullet = magazineManager.shoot(player.x, player.y, player.aimAngle)
+                val bullet = magazineManager.shoot(player.gunTipX, player.gunTipY, player.aimAngle)
                 if (bullet != null) {
+                    player.triggerMuzzleFlash()
                     bullets.add(bullet)
                 }
             }
         }
         
-        if (Gdx.input.isKeyJustPressed(Input.Keys.SPACE)) {
+        if (Gdx.input.isKeyJustPressed(Input.Keys.TAB)) {
             magazineManager.rearrange()
         }
         
@@ -96,7 +118,7 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
     }
     
     private fun update(delta: Float) {
-        player.update(delta)
+        player.update(Gdx.graphics.deltaTime)
         magazineManager.update(delta)
         
         enemies.forEach { it.update(delta, player.x, player.y) }
@@ -177,7 +199,7 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
         val distance = 400f + Math.random().toFloat() * 200f
         val x = player.x + kotlin.math.cos(Math.toRadians(angle.toDouble())).toFloat() * distance
         val y = player.y + kotlin.math.sin(Math.toRadians(angle.toDouble())).toFloat() * distance
-        val hasShield = Math.random() < 0.2 // ~1 in 5 enemies has a shield
+        val hasShield = Math.random() < 0.2
         enemies.add(Enemy(x, y, hasShield))
     }
     
@@ -206,6 +228,31 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
         
         shapeRenderer.projectionMatrix = uiCamera.combined
         magazineUI.draw(shapeRenderer, magazineManager)
+        
+        drawTimeIndicator()
+    }
+    
+    private fun drawTimeIndicator() {
+        shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
+        
+        val barWidth = 100f
+        val barHeight = 4f
+        val barX = 1280f - barWidth - 20f
+        val barY = 720f - 20f
+        
+        shapeRenderer.color = Color(0.2f, 0.2f, 0.25f, 0.8f)
+        shapeRenderer.rect(barX, barY, barWidth, barHeight)
+        
+        val timeColor = Color(
+            0.3f + 0.7f * currentTimeScale,
+            0.5f + 0.5f * currentTimeScale,
+            0.9f,
+            1f
+        )
+        shapeRenderer.color = timeColor
+        shapeRenderer.rect(barX, barY, barWidth * currentTimeScale, barHeight)
+        
+        shapeRenderer.end()
     }
     
     private fun drawGrid() {
