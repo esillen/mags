@@ -5,10 +5,13 @@ import com.badlogic.gdx.Input
 import com.badlogic.gdx.graphics.Color
 import com.badlogic.gdx.graphics.OrthographicCamera
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer
-import com.badlogic.gdx.math.Vector2
 import com.badlogic.gdx.math.Vector3
 import com.badlogic.gdx.utils.ScreenUtils
+import com.mags.bullet.Bullet
+import com.mags.bullet.BulletBehavior
+import com.mags.bullet.BulletType
 import ktx.app.KtxScreen
+import kotlin.math.sqrt
 
 class GameScreen(private val game: MagsGame) : KtxScreen {
     private val worldCamera = OrthographicCamera()
@@ -18,6 +21,7 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
     private val player = Player(0f, 0f)
     private val enemies = mutableListOf<Enemy>()
     private val bullets = mutableListOf<Bullet>()
+    private val droppedBullets = mutableListOf<DroppedBullet>()
     private val magazineManager = MagazineManager()
     private val magazineUI = MagazineUI()
     
@@ -52,10 +56,24 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
         player.aimAt(mouseScreen.x, mouseScreen.y)
         
         if (Gdx.input.isButtonJustPressed(Input.Buttons.LEFT)) {
-            val bullet = magazineManager.shoot(player.x, player.y, player.aimAngle)
-            if (bullet != null) {
-                bullets.add(bullet)
+            val bulletType = magazineManager.selectedMagazine.peekTop()
+            if (bulletType != null && bulletType.behavior == BulletBehavior.BOMB) {
+                if (magazineManager.canAct) {
+                    val bomb = magazineManager.shoot(player.x, player.y, player.aimAngle)
+                    if (bomb != null) {
+                        applyBombDamage(bomb)
+                    }
+                }
+            } else {
+                val bullet = magazineManager.shoot(player.x, player.y, player.aimAngle)
+                if (bullet != null) {
+                    bullets.add(bullet)
+                }
             }
+        }
+        
+        if (Gdx.input.isKeyJustPressed(Input.Keys.SPACE)) {
+            magazineManager.rearrange()
         }
         
         if (Gdx.input.isKeyJustPressed(Input.Keys.NUM_1)) magazineManager.selectMagazine(0)
@@ -66,23 +84,55 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
         if (Gdx.input.isKeyJustPressed(Input.Keys.E)) magazineManager.cycleNext()
     }
     
+    private fun applyBombDamage(bomb: Bullet) {
+        enemies.forEach { enemy ->
+            val dx = enemy.x - player.x
+            val dy = enemy.y - player.y
+            val dist = sqrt(dx * dx + dy * dy)
+            if (dist < bomb.radius) {
+                enemy.takeDamage(bomb.damage, bomb.statusEffect, bomb.element)
+            }
+        }
+    }
+    
     private fun update(delta: Float) {
         player.update(delta)
+        magazineManager.update(delta)
         
         enemies.forEach { it.update(delta, player.x, player.y) }
+        
+        val deadEnemies = enemies.filter { it.isDead }
+        deadEnemies.forEach { enemy ->
+            enemy.bulletDrop?.let { bulletType ->
+                droppedBullets.add(DroppedBullet(enemy.x, enemy.y, bulletType))
+            }
+        }
         enemies.removeAll { it.isDead }
         
         bullets.forEach { it.update(delta) }
         
         bullets.forEach { bullet ->
-            enemies.forEach { enemy ->
-                if (bullet.isAlive && enemy.collidesWith(bullet.x, bullet.y, bullet.radius)) {
-                    enemy.takeDamage(bullet.damage)
-                    bullet.onHit()
+            if (bullet.isAlive) {
+                enemies.forEach { enemy ->
+                    if (bullet.isAlive && enemy.collidesWith(bullet.x, bullet.y, bullet.radius)) {
+                        enemy.takeDamage(bullet.damage, bullet.statusEffect, bullet.element)
+                        bullet.onHit()
+                        
+                        if (bullet.hasExploded && bullet.splashRadius > 0) {
+                            applyGrenadeSplash(bullet)
+                        }
+                    }
                 }
             }
         }
+        
+        val explodedGrenades = bullets.filter { !it.isAlive && it.hasExploded && it.splashRadius > 0 }
+        explodedGrenades.forEach { grenade ->
+            applyGrenadeSplash(grenade)
+        }
         bullets.removeAll { !it.isAlive }
+        
+        pickupDroppedBullets()
         
         spawnTimer += delta
         if (spawnTimer >= spawnInterval) {
@@ -94,12 +144,41 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
         worldCamera.update()
     }
     
+    private fun applyGrenadeSplash(grenade: Bullet) {
+        enemies.forEach { enemy ->
+            val dx = enemy.x - grenade.x
+            val dy = enemy.y - grenade.y
+            val dist = sqrt(dx * dx + dy * dy)
+            if (dist < grenade.splashRadius) {
+                enemy.takeDamage(grenade.splashDamage, grenade.statusEffect, grenade.element)
+            }
+        }
+    }
+    
+    private fun pickupDroppedBullets() {
+        val pickupRadius = 50f
+        val toRemove = mutableListOf<DroppedBullet>()
+        
+        droppedBullets.forEach { dropped ->
+            val dx = dropped.x - player.x
+            val dy = dropped.y - player.y
+            val dist = sqrt(dx * dx + dy * dy)
+            if (dist < pickupRadius) {
+                if (magazineManager.addBulletToFirstAvailable(dropped.bulletType)) {
+                    toRemove.add(dropped)
+                }
+            }
+        }
+        droppedBullets.removeAll(toRemove)
+    }
+    
     private fun spawnEnemy() {
         val angle = Math.random().toFloat() * 360f
         val distance = 400f + Math.random().toFloat() * 200f
         val x = player.x + kotlin.math.cos(Math.toRadians(angle.toDouble())).toFloat() * distance
         val y = player.y + kotlin.math.sin(Math.toRadians(angle.toDouble())).toFloat() * distance
-        enemies.add(Enemy(x, y))
+        val hasShield = Math.random() < 0.2 // ~1 in 5 enemies has a shield
+        enemies.add(Enemy(x, y, hasShield))
     }
     
     private fun draw() {
@@ -110,6 +189,7 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
         shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
         
         drawGrid()
+        droppedBullets.forEach { it.draw(shapeRenderer) }
         bullets.forEach { it.draw(shapeRenderer) }
         enemies.forEach { it.draw(shapeRenderer) }
         player.draw(shapeRenderer)
@@ -144,5 +224,29 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
     
     override fun dispose() {
         shapeRenderer.dispose()
+        magazineUI.dispose()
+    }
+}
+
+class DroppedBullet(
+    val x: Float,
+    val y: Float,
+    val bulletType: BulletType
+) {
+    private var bobOffset = 0f
+    private var bobTimer = Math.random().toFloat() * 6.28f
+    
+    fun draw(renderer: ShapeRenderer) {
+        bobTimer += Gdx.graphics.deltaTime * 3f
+        bobOffset = kotlin.math.sin(bobTimer) * 3f
+        
+        renderer.color = Color(0.2f, 0.2f, 0.25f, 0.8f)
+        renderer.circle(x, y + bobOffset, 14f)
+        
+        renderer.color = bulletType.color
+        renderer.circle(x, y + bobOffset, 10f)
+        
+        renderer.color = Color(1f, 1f, 1f, 0.3f)
+        renderer.circle(x - 3f, y + bobOffset + 3f, 3f)
     }
 }

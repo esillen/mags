@@ -1,0 +1,7 @@
+This bullet should slow down an enemy. When they exit that status effect, they are dealt a small amount of damage
+Medium impact damage
+Medium fast reload time
+Fast rearrange time
+Common to Medium to find
+Ice-y in the bullet display
+Few to a handful uses

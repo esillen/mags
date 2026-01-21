@@ -1,0 +1,8 @@
+This bullet should when it hits an enemy deal damage over time
+Medium impact damage
+Low damage over time over long time
+Medium reload time
+Fast rearrange time
+Medium to find
+Fiery in the bullet display
+Few or a single use

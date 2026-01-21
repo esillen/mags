@@ -2,18 +2,58 @@ package com.mags
 
 import com.badlogic.gdx.graphics.Color
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer
+import com.mags.bullet.BulletType
+import com.mags.bullet.BulletTypes
+import com.mags.bullet.Element
+import com.mags.bullet.StatusEffectType
+import com.mags.effect.BurningEffect
+import com.mags.effect.FrozenEffect
+import com.mags.effect.StatusEffectManager
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.sqrt
 
-class Enemy(var x: Float, var y: Float) {
+class Shield(val element: Element) {
+    var isActive = true
+    val damageReduction = 0.5f
+    
+    fun tryBreak(bulletElement: Element?): Boolean {
+        if (bulletElement == element) {
+            isActive = false
+            return true
+        }
+        return false
+    }
+}
+
+class Enemy(var x: Float, var y: Float, hasShield: Boolean = false) {
     val radius = 25f
-    private val speed = 80f
+    private val baseSpeed = 80f
     private val maxHealth = 100f
     private var health = maxHealth
     
-    val isDead: Boolean
-        get() = health <= 0
+    private val statusEffects = StatusEffectManager()
+    
+    var shield: Shield? = if (hasShield) Shield(Element.entries.random()) else null
+        private set
+    
+    val isDead: Boolean get() = health <= 0
+    val hasActiveShield: Boolean get() = shield?.isActive == true
+    
+    private var droppedBullet: BulletType? = null
+    val bulletDrop: BulletType? get() = droppedBullet
+    
+    private var shieldPulse = 0f
     
     fun update(delta: Float, playerX: Float, playerY: Float) {
+        val effectDamage = statusEffects.update(delta)
+        if (effectDamage > 0) {
+            health -= effectDamage
+        }
+        
+        val speedMultiplier = statusEffects.getEffect(FrozenEffect::class.java)?.getSpeedMultiplier() ?: 1f
+        val speed = baseSpeed * speedMultiplier
+        
         val dx = playerX - x
         val dy = playerY - y
         val len = sqrt(dx * dx + dy * dy)
@@ -21,6 +61,8 @@ class Enemy(var x: Float, var y: Float) {
             x += (dx / len) * speed * delta
             y += (dy / len) * speed * delta
         }
+        
+        shieldPulse += delta * 3f
     }
     
     fun collidesWith(px: Float, py: Float, pr: Float): Boolean {
@@ -30,13 +72,64 @@ class Enemy(var x: Float, var y: Float) {
         return dist < radius + pr
     }
     
-    fun takeDamage(amount: Float) {
-        health -= amount
+    fun takeDamage(amount: Float, statusEffect: StatusEffectType? = null, bulletElement: Element? = null) {
+        var finalDamage = amount
+        
+        shield?.let { s ->
+            if (s.isActive) {
+                if (s.tryBreak(bulletElement)) {
+                    // Shield broken by matching element - full damage
+                } else {
+                    finalDamage *= s.damageReduction
+                }
+            }
+        }
+        
+        health -= finalDamage
+        
+        statusEffect?.let { applyStatusEffect(it) }
+        
+        if (isDead && droppedBullet == null) {
+            droppedBullet = BulletTypes.getRandomDrop()
+        }
+    }
+    
+    private fun applyStatusEffect(type: StatusEffectType) {
+        when (type) {
+            StatusEffectType.BURNING -> statusEffects.addEffect(BurningEffect())
+            StatusEffectType.FROZEN -> statusEffects.addEffect(FrozenEffect())
+        }
     }
     
     fun draw(renderer: ShapeRenderer) {
-        renderer.color = Color(0.9f, 0.3f, 0.3f, 1f)
+        if (hasActiveShield) {
+            drawShield(renderer)
+        }
+        
+        val baseColor = when {
+            statusEffects.hasEffect(FrozenEffect::class.java) -> Color(0.5f, 0.7f, 0.9f, 1f)
+            statusEffects.hasEffect(BurningEffect::class.java) -> Color(1f, 0.5f, 0.3f, 1f)
+            else -> Color(0.9f, 0.3f, 0.3f, 1f)
+        }
+        renderer.color = baseColor
         renderer.rect(x - radius, y - radius, radius * 2, radius * 2)
+    }
+    
+    private fun drawShield(renderer: ShapeRenderer) {
+        val s = shield ?: return
+        val shieldRadius = radius + 8f + sin(shieldPulse) * 2f
+        
+        renderer.color = Color(s.element.color.r, s.element.color.g, s.element.color.b, 0.3f)
+        renderer.circle(x, y, shieldRadius)
+        
+        renderer.color = Color(s.element.color.r, s.element.color.g, s.element.color.b, 0.7f)
+        val segments = 8
+        for (i in 0 until segments) {
+            val angle = (i.toFloat() / segments) * Math.PI.toFloat() * 2 + shieldPulse * 0.5f
+            val px = x + cos(angle) * shieldRadius
+            val py = y + sin(angle) * shieldRadius
+            renderer.circle(px, py, 3f)
+        }
     }
     
     fun drawHealthBar(renderer: ShapeRenderer) {
@@ -63,5 +156,13 @@ class Enemy(var x: Float, var y: Float) {
             else -> Color(0.8f, 0.3f, 0.3f, 1f)
         }
         renderer.rect(x - barWidth / 2, barY, barWidth * healthPercent, barHeight)
+        
+        if (hasActiveShield) {
+            val shieldY = barY + barHeight + 2f
+            renderer.color = shield!!.element.color
+            renderer.rect(x - barWidth / 2, shieldY, barWidth, 3f)
+        }
+        
+        statusEffects.drawIndicators(renderer, x, y, barY + barHeight + (if (hasActiveShield) 7f else 3f))
     }
 }

@@ -1,0 +1,8 @@
+Elemental bullet that destroys red shields
+Medium impact damage (slightly more than infinite)
+Medium speed
+Fast reload time
+Fast rearrange time
+Common to find
+Red glowing circle in display
+Few uses

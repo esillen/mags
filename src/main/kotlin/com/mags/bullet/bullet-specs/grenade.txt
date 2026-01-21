@@ -1,0 +1,9 @@
+This bullet should explode when hitting an enemy or after a duration
+High impact damage
+Medium splash damage
+Medium reload time
+Slow speed
+Medium rearrange time
+Rare to find
+Green and big in bullet display
+Few or a single use

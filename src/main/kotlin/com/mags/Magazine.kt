@@ -1,29 +1,9 @@
 package com.mags
 
 import com.badlogic.gdx.graphics.Color
-
-data class BulletType(
-    val name: String,
-    val speed: Float,
-    val damage: Float,
-    val radius: Float,
-    val color: Color,
-    val usesRemaining: Int // -1 means infinite
-) {
-    fun createBullet(x: Float, y: Float, angle: Float): Bullet {
-        return Bullet(x, y, angle, speed, damage, radius, color)
-    }
-    
-    fun withDecrementedUse(): BulletType {
-        return if (usesRemaining > 0) copy(usesRemaining = usesRemaining - 1) else this
-    }
-    
-    val isInfinite: Boolean
-        get() = usesRemaining == -1
-    
-    val isExhausted: Boolean
-        get() = usesRemaining == 0
-}
+import com.mags.bullet.Bullet
+import com.mags.bullet.BulletType
+import com.mags.bullet.BulletTypes
 
 class Magazine(
     val name: String,
@@ -32,23 +12,28 @@ class Magazine(
 ) {
     private val bullets = mutableListOf<BulletType>()
     
-    val bulletCount: Int
-        get() = bullets.size
+    val bulletCount: Int get() = bullets.size
+    val bulletList: List<BulletType> get() = bullets.toList()
+    val isEmpty: Boolean get() = bullets.isEmpty()
+    val topBullet: BulletType? get() = bullets.lastOrNull()
     
-    val bulletList: List<BulletType>
-        get() = bullets.toList()
-    
-    fun addBullet(bullet: BulletType) {
+    fun addBullet(bullet: BulletType): Boolean {
         if (bullets.size < capacity) {
             bullets.add(bullet)
+            return true
         }
+        return false
     }
     
-    fun addBulletToBottom(bullet: BulletType) {
+    fun addBulletToBottom(bullet: BulletType): Boolean {
         if (bullets.size < capacity) {
             bullets.add(0, bullet)
+            return true
         }
+        return false
     }
+    
+    fun peekTop(): BulletType? = bullets.lastOrNull()
     
     fun shoot(x: Float, y: Float, angle: Float): Bullet? {
         if (bullets.isEmpty()) return null
@@ -67,6 +52,13 @@ class Magazine(
         
         return bullet
     }
+    
+    fun rearrangeTopToBottom(): BulletType? {
+        if (bullets.isEmpty()) return null
+        val top = bullets.removeAt(bullets.lastIndex)
+        bullets.add(0, top)
+        return top
+    }
 }
 
 class MagazineManager {
@@ -80,22 +72,49 @@ class MagazineManager {
     var selectedIndex = 0
         private set
     
-    val selectedMagazine: Magazine
-        get() = magazines[selectedIndex]
+    val selectedMagazine: Magazine get() = magazines[selectedIndex]
+    val allMagazines: List<Magazine> get() = magazines
     
-    val allMagazines: List<Magazine>
-        get() = magazines
+    private var reloadTimer = 0f
+    private var rearrangeTimer = 0f
+    val isReloading: Boolean get() = reloadTimer > 0
+    val isRearranging: Boolean get() = rearrangeTimer > 0
+    val canAct: Boolean get() = !isReloading && !isRearranging
+    
+    var reloadProgress: Float = 0f
+        private set
+    var rearrangeProgress: Float = 0f
+        private set
+    
+    private var currentReloadTime = 0f
+    private var currentRearrangeTime = 0f
     
     init {
-        val weakBullet = BulletType(
-            name = "Weak",
-            speed = 400f,
-            damage = 15f,
-            radius = 5f,
-            color = Color(0.9f, 0.9f, 0.5f, 1f),
-            usesRemaining = -1
-        )
-        magazines.forEach { it.addBullet(weakBullet) }
+        magazines.forEach { mag ->
+            mag.addBullet(BulletTypes.INFINITE)
+            repeat(mag.capacity - 1) {
+                BulletTypes.getRandomDrop()?.let { mag.addBullet(it) }
+            }
+        }
+    }
+    
+    fun update(delta: Float) {
+        if (reloadTimer > 0) {
+            reloadTimer -= delta
+            reloadProgress = 1f - (reloadTimer / currentReloadTime).coerceIn(0f, 1f)
+            if (reloadTimer <= 0) {
+                reloadTimer = 0f
+                reloadProgress = 0f
+            }
+        }
+        if (rearrangeTimer > 0) {
+            rearrangeTimer -= delta
+            rearrangeProgress = 1f - (rearrangeTimer / currentRearrangeTime).coerceIn(0f, 1f)
+            if (rearrangeTimer <= 0) {
+                rearrangeTimer = 0f
+                rearrangeProgress = 0f
+            }
+        }
     }
     
     fun selectMagazine(index: Int) {
@@ -113,6 +132,42 @@ class MagazineManager {
     }
     
     fun shoot(x: Float, y: Float, angle: Float): Bullet? {
-        return selectedMagazine.shoot(x, y, angle)
+        if (!canAct) return null
+        
+        val bulletType = selectedMagazine.peekTop() ?: return null
+        val bullet = selectedMagazine.shoot(x, y, angle) ?: return null
+        
+        currentReloadTime = bulletType.reloadTime
+        reloadTimer = currentReloadTime
+        
+        return bullet
+    }
+    
+    fun rearrange(): Boolean {
+        if (!canAct) return false
+        
+        val bulletType = selectedMagazine.peekTop() ?: return false
+        selectedMagazine.rearrangeTopToBottom() ?: return false
+        
+        currentRearrangeTime = bulletType.rearrangeTime
+        rearrangeTimer = currentRearrangeTime
+        
+        return true
+    }
+    
+    fun addBulletToMagazine(bullet: BulletType, magazineIndex: Int): Boolean {
+        if (magazineIndex in magazines.indices) {
+            return magazines[magazineIndex].addBullet(bullet)
+        }
+        return false
+    }
+    
+    fun addBulletToFirstAvailable(bullet: BulletType): Boolean {
+        for (magazine in magazines) {
+            if (magazine.addBullet(bullet)) {
+                return true
+            }
+        }
+        return false
     }
 }

@@ -1,0 +1,7 @@
+This bullet should damage all enemies around the player
+High damage
+Long reload time
+Medium rearrange time
+Rare to find
+Big and red in the bullet display
+Few or a single use
