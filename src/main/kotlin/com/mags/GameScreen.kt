@@ -3,6 +3,7 @@ package com.mags
 import com.badlogic.gdx.Gdx
 import com.badlogic.gdx.Input
 import com.badlogic.gdx.graphics.Color
+import com.badlogic.gdx.graphics.GL20
 import com.badlogic.gdx.graphics.OrthographicCamera
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer
 import com.badlogic.gdx.math.Vector3
@@ -11,6 +12,8 @@ import com.mags.bullet.Bullet
 import com.mags.bullet.BulletBehavior
 import com.mags.bullet.BulletType
 import ktx.app.KtxScreen
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 class GameScreen(private val game: MagsGame) : KtxScreen {
@@ -22,8 +25,11 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
     private val enemies = mutableListOf<Enemy>()
     private val bullets = mutableListOf<Bullet>()
     private val droppedBullets = mutableListOf<DroppedBullet>()
+    private val obstacles = mutableListOf<Obstacle>()
+    private val impactEffects = mutableListOf<ImpactEffect>()
     private val magazineManager = MagazineManager()
     private val magazineUI = MagazineUI()
+    private val visionSystem = VisionSystem()
     
     private var spawnTimer = 0f
     private val spawnInterval = 2f
@@ -37,6 +43,22 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
         worldCamera.setToOrtho(false, 1280f, 720f)
         uiCamera.setToOrtho(false, 1280f, 720f)
         enemies.add(Enemy(300f, 300f))
+        
+        // Spawn some initial obstacles
+        spawnInitialObstacles()
+    }
+    
+    private fun spawnInitialObstacles() {
+        val positions = listOf(
+            Pair(200f, 200f), Pair(-150f, 250f), Pair(350f, -100f),
+            Pair(-200f, -200f), Pair(100f, -300f), Pair(-350f, 50f),
+            Pair(400f, 300f), Pair(-100f, 400f)
+        )
+        positions.forEach { (x, y) ->
+            val width = 50f + (Math.random() * 60f).toFloat()
+            val height = 50f + (Math.random() * 60f).toFloat()
+            obstacles.add(Obstacle(x, y, width, height))
+        }
     }
     
     override fun render(delta: Float) {
@@ -51,6 +73,10 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
         
         handleInput(delta, worldDelta, dx, dy)
         update(worldDelta)
+        
+        // Update vision
+        visionSystem.updateVision(player.x, player.y, obstacles)
+        
         draw()
     }
     
@@ -68,8 +94,15 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
     }
     
     private fun handleInput(realDelta: Float, @Suppress("UNUSED_PARAMETER") worldDelta: Float, dx: Float, dy: Float) {
-        // Player moves at real time speed for responsive controls
         player.move(dx, dy, realDelta)
+        
+        // Push player out of obstacles
+        obstacles.forEach { obstacle ->
+            obstacle.pushOutCircle(player.x, player.y, player.radius)?.let { (newX, newY) ->
+                player.x = newX
+                player.y = newY
+            }
+        }
         
         val mouseScreen = Vector3(Gdx.input.x.toFloat(), Gdx.input.y.toFloat(), 0f)
         worldCamera.unproject(mouseScreen)
@@ -115,13 +148,23 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
                 enemy.takeDamage(bomb.damage, bomb.statusEffect, bomb.element)
             }
         }
+        obstacles.forEach { obstacle ->
+            val dx = obstacle.x - player.x
+            val dy = obstacle.y - player.y
+            val dist = sqrt(dx * dx + dy * dy)
+            if (dist < bomb.radius) {
+                obstacle.takeDamage(bomb.damage)
+            }
+        }
     }
     
     private fun update(delta: Float) {
         player.update(Gdx.graphics.deltaTime)
         magazineManager.update(delta)
         
-        enemies.forEach { it.update(delta, player.x, player.y) }
+        enemies.forEach { enemy ->
+            enemy.update(delta, player.x, player.y, obstacles)
+        }
         
         val deadEnemies = enemies.filter { it.isDead }
         deadEnemies.forEach { enemy ->
@@ -133,6 +176,28 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
         
         bullets.forEach { it.update(delta) }
         
+        // Bullet-obstacle collision
+        bullets.forEach { bullet ->
+            if (bullet.isAlive) {
+                obstacles.forEach { obstacle ->
+                    if (obstacle.collidesWithCircle(bullet.x, bullet.y, bullet.radius)) {
+                        obstacle.takeDamage(bullet.damage)
+                        impactEffects.add(ImpactEffect(bullet.x, bullet.y, bullet.color))
+                        bullet.onHit()
+                        
+                        if (bullet.hasExploded && bullet.splashRadius > 0) {
+                            applyGrenadeSplashToObstacles(bullet)
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Update impact effects
+        impactEffects.forEach { it.update(Gdx.graphics.deltaTime) }
+        impactEffects.removeAll { it.isFinished }
+        
+        // Bullet-enemy collision
         bullets.forEach { bullet ->
             if (bullet.isAlive) {
                 enemies.forEach { enemy ->
@@ -151,8 +216,12 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
         val explodedGrenades = bullets.filter { !it.isAlive && it.hasExploded && it.splashRadius > 0 }
         explodedGrenades.forEach { grenade ->
             applyGrenadeSplash(grenade)
+            applyGrenadeSplashToObstacles(grenade)
         }
         bullets.removeAll { !it.isAlive }
+        
+        // Remove destroyed obstacles
+        obstacles.removeAll { it.isDead }
         
         pickupDroppedBullets()
         
@@ -177,6 +246,17 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
         }
     }
     
+    private fun applyGrenadeSplashToObstacles(grenade: Bullet) {
+        obstacles.forEach { obstacle ->
+            val dx = obstacle.x - grenade.x
+            val dy = obstacle.y - grenade.y
+            val dist = sqrt(dx * dx + dy * dy)
+            if (dist < grenade.splashRadius) {
+                obstacle.takeDamage(grenade.splashDamage)
+            }
+        }
+    }
+    
     private fun pickupDroppedBullets() {
         val pickupRadius = 50f
         val toRemove = mutableListOf<DroppedBullet>()
@@ -195,12 +275,22 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
     }
     
     private fun spawnEnemy() {
-        val angle = Math.random().toFloat() * 360f
-        val distance = 400f + Math.random().toFloat() * 200f
-        val x = player.x + kotlin.math.cos(Math.toRadians(angle.toDouble())).toFloat() * distance
-        val y = player.y + kotlin.math.sin(Math.toRadians(angle.toDouble())).toFloat() * distance
-        val hasShield = Math.random() < 0.2
-        enemies.add(Enemy(x, y, hasShield))
+        var x: Float
+        var y: Float
+        var attempts = 0
+        
+        do {
+            val angle = Math.random().toFloat() * 360f
+            val distance = 400f + Math.random().toFloat() * 200f
+            x = player.x + cos(Math.toRadians(angle.toDouble())).toFloat() * distance
+            y = player.y + sin(Math.toRadians(angle.toDouble())).toFloat() * distance
+            attempts++
+        } while (obstacles.any { it.collidesWithCircle(x, y, 25f) } && attempts < 10)
+        
+        if (attempts < 10) {
+            val hasShield = Math.random() < 0.2
+            enemies.add(Enemy(x, y, hasShield))
+        }
     }
     
     private fun draw() {
@@ -208,28 +298,123 @@ class GameScreen(private val game: MagsGame) : KtxScreen {
         
         shapeRenderer.projectionMatrix = worldCamera.combined
         
+        // Enable blending for transparency
+        Gdx.gl.glEnable(GL20.GL_BLEND)
+        Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA)
+        
         shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
         
         drawGrid()
-        droppedBullets.forEach { it.draw(shapeRenderer) }
-        bullets.forEach { it.draw(shapeRenderer) }
-        enemies.forEach { it.draw(shapeRenderer) }
+        
+        // Draw revealed but not currently visible obstacles (dimmed)
+        obstacles.filter { it.hasBeenSeen && !isObstacleVisible(it) }.forEach { 
+            it.drawRevealed(shapeRenderer) 
+        }
+        
+        // Draw visible obstacles
+        obstacles.filter { isObstacleVisible(it) }.forEach { it.draw(shapeRenderer) }
+        
+        // Draw visible dropped bullets
+        droppedBullets.filter { isPointVisible(it.x, it.y) }.forEach { it.draw(shapeRenderer) }
+        
+        // Draw visible bullets
+        bullets.filter { isPointVisible(it.x, it.y) }.forEach { it.draw(shapeRenderer) }
+        
+        // Draw impact effects (visible ones)
+        impactEffects.filter { isPointVisible(it.x, it.y) }.forEach { it.draw(shapeRenderer) }
+        
+        // Draw visible enemies
+        enemies.filter { isEnemyVisible(it) }.forEach { it.draw(shapeRenderer) }
+        
+        // Always draw player
         player.draw(shapeRenderer)
         
         shapeRenderer.end()
         
+        // Draw fog of war
+        drawFogOfWar()
+        
+        // Draw health bars for visible enemies
         shapeRenderer.begin(ShapeRenderer.ShapeType.Line)
-        enemies.forEach { it.drawHealthBar(shapeRenderer) }
+        enemies.filter { isEnemyVisible(it) }.forEach { it.drawHealthBar(shapeRenderer) }
         shapeRenderer.end()
         
         shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
-        enemies.forEach { it.drawHealthBarFill(shapeRenderer) }
+        enemies.filter { isEnemyVisible(it) }.forEach { it.drawHealthBarFill(shapeRenderer) }
         shapeRenderer.end()
         
         shapeRenderer.projectionMatrix = uiCamera.combined
         magazineUI.draw(shapeRenderer, magazineManager)
         
         drawTimeIndicator()
+    }
+    
+    private fun isPointVisible(x: Float, y: Float): Boolean {
+        return visionSystem.isPointVisible(player.x, player.y, x, y, obstacles)
+    }
+    
+    private fun isEnemyVisible(enemy: Enemy): Boolean {
+        return visionSystem.isCircleVisible(player.x, player.y, enemy.x, enemy.y, enemy.radius, obstacles)
+    }
+    
+    private fun isObstacleVisible(obstacle: Obstacle): Boolean {
+        // Check if any corner or center is visible
+        val points = listOf(
+            Pair(obstacle.x, obstacle.y),
+            Pair(obstacle.left, obstacle.bottom),
+            Pair(obstacle.right, obstacle.bottom),
+            Pair(obstacle.left, obstacle.top),
+            Pair(obstacle.right, obstacle.top)
+        )
+        return points.any { (px, py) -> isPointVisible(px, py) }
+    }
+    
+    private fun drawFogOfWar() {
+        val visiblePolygon = visionSystem.getVisiblePolygon()
+        if (visiblePolygon.isEmpty()) return
+        
+        shapeRenderer.begin(ShapeRenderer.ShapeType.Filled)
+        shapeRenderer.color = Color(0.05f, 0.05f, 0.08f, 0.9f)
+        
+        // Draw fog triangles between rays to create shadow effect
+        val playerX = player.x
+        val playerY = player.y
+        val farDist = 1500f
+        
+        for (i in visiblePolygon.indices) {
+            val current = visiblePolygon[i]
+            val next = visiblePolygon[(i + 1) % visiblePolygon.size]
+            
+            // Calculate direction to extend rays
+            val dx1 = current.first - playerX
+            val dy1 = current.second - playerY
+            val len1 = sqrt(dx1 * dx1 + dy1 * dy1)
+            
+            val dx2 = next.first - playerX
+            val dy2 = next.second - playerY
+            val len2 = sqrt(dx2 * dx2 + dy2 * dy2)
+            
+            if (len1 > 0 && len2 > 0) {
+                val farX1 = playerX + (dx1 / len1) * farDist
+                val farY1 = playerY + (dy1 / len1) * farDist
+                val farX2 = playerX + (dx2 / len2) * farDist
+                val farY2 = playerY + (dy2 / len2) * farDist
+                
+                // Draw shadow quad from ray hit points to far distance
+                shapeRenderer.triangle(
+                    current.first, current.second,
+                    farX1, farY1,
+                    farX2, farY2
+                )
+                shapeRenderer.triangle(
+                    current.first, current.second,
+                    farX2, farY2,
+                    next.first, next.second
+                )
+            }
+        }
+        
+        shapeRenderer.end()
     }
     
     private fun drawTimeIndicator() {

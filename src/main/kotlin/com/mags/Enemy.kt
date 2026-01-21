@@ -45,7 +45,7 @@ class Enemy(var x: Float, var y: Float, hasShield: Boolean = false) {
     
     private var shieldPulse = 0f
     
-    fun update(delta: Float, playerX: Float, playerY: Float) {
+    fun update(delta: Float, playerX: Float, playerY: Float, obstacles: List<Obstacle> = emptyList()) {
         val effectDamage = statusEffects.update(delta)
         if (effectDamage > 0) {
             health -= effectDamage
@@ -54,12 +54,61 @@ class Enemy(var x: Float, var y: Float, hasShield: Boolean = false) {
         val speedMultiplier = statusEffects.getEffect(FrozenEffect::class.java)?.getSpeedMultiplier() ?: 1f
         val speed = baseSpeed * speedMultiplier
         
-        val dx = playerX - x
-        val dy = playerY - y
+        var dx = playerX - x
+        var dy = playerY - y
         val len = sqrt(dx * dx + dy * dy)
+        
         if (len > radius) {
-            x += (dx / len) * speed * delta
-            y += (dy / len) * speed * delta
+            // Normalize direction
+            dx /= len
+            dy /= len
+            
+            // Simple obstacle avoidance - check nearby obstacles and steer away
+            var avoidX = 0f
+            var avoidY = 0f
+            val avoidRadius = radius + 50f
+            
+            obstacles.forEach { obstacle ->
+                val obstDx = x - obstacle.x
+                val obstDy = y - obstacle.y
+                val obstDist = sqrt(obstDx * obstDx + obstDy * obstDy)
+                
+                if (obstDist < avoidRadius + obstacle.width / 2) {
+                    val pushStrength = 1f - (obstDist / (avoidRadius + obstacle.width / 2))
+                    if (obstDist > 0.1f) {
+                        avoidX += (obstDx / obstDist) * pushStrength * 2f
+                        avoidY += (obstDy / obstDist) * pushStrength * 2f
+                    }
+                }
+            }
+            
+            // Combine direction towards player with avoidance
+            dx += avoidX
+            dy += avoidY
+            
+            val finalLen = sqrt(dx * dx + dy * dy)
+            if (finalLen > 0.1f) {
+                dx /= finalLen
+                dy /= finalLen
+            }
+            
+            // Move
+            val newX = x + dx * speed * delta
+            val newY = y + dy * speed * delta
+            
+            // Check collision and push out
+            var finalX = newX
+            var finalY = newY
+            
+            obstacles.forEach { obstacle ->
+                obstacle.pushOutCircle(finalX, finalY, radius)?.let { (pushX, pushY) ->
+                    finalX = pushX
+                    finalY = pushY
+                }
+            }
+            
+            x = finalX
+            y = finalY
         }
         
         shieldPulse += delta * 3f
