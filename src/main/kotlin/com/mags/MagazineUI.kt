@@ -1,7 +1,9 @@
 package com.mags
 
+import com.badlogic.gdx.Gdx
 import com.badlogic.gdx.graphics.Color
 import com.badlogic.gdx.graphics.g2d.BitmapFont
+import com.badlogic.gdx.graphics.g2d.GlyphLayout
 import com.badlogic.gdx.graphics.g2d.SpriteBatch
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer
 import com.mags.bullet.BulletDisplayShape
@@ -21,11 +23,28 @@ class MagazineUI {
         data.setScale(0.8f)
         color = Color.WHITE
     }
+    private val tooltipFont = BitmapFont().apply {
+        data.setScale(0.7f)
+        color = Color.WHITE
+    }
+    private val glyphLayout = GlyphLayout()
+    
+    private var hoveredBullet: BulletType? = null
+    private var tooltipX = 0f
+    private var tooltipY = 0f
     
     fun draw(renderer: ShapeRenderer, manager: MagazineManager) {
         val magazines = manager.allMagazines
         val totalWidth = magazines.size * magWidth + (magazines.size - 1) * magSpacing
         val startX = (1280f - totalWidth) / 2
+        
+        // Get mouse position in UI coordinates
+        val mouseX = Gdx.input.x.toFloat()
+        val mouseY = 720f - Gdx.input.y.toFloat()
+        
+        // Find hovered bullet
+        hoveredBullet = null
+        findHoveredBullet(magazines, startX, mouseX, mouseY)
         
         renderer.begin(ShapeRenderer.ShapeType.Filled)
         
@@ -34,7 +53,7 @@ class MagazineUI {
             val y = bottomPadding
             val isSelected = index == manager.selectedIndex
             
-            drawMagazine(renderer, magazine, x, y, isSelected)
+            drawMagazine(renderer, magazine, x, y, isSelected, mouseX, mouseY)
         }
         
         renderer.end()
@@ -75,6 +94,134 @@ class MagazineUI {
         }
         
         spriteBatch.end()
+        
+        // Draw tooltip if hovering over a bullet
+        hoveredBullet?.let { bullet ->
+            drawTooltip(renderer, bullet)
+        }
+    }
+    
+    private fun findHoveredBullet(magazines: List<Magazine>, startX: Float, mouseX: Float, mouseY: Float) {
+        val innerPadding = 6f
+        val bulletTotalHeight = bulletHeight + bulletSpacing
+        
+        magazines.forEachIndexed { magIndex, magazine ->
+            val magX = startX + magIndex * (magWidth + magSpacing)
+            val magY = bottomPadding
+            
+            val bullets = magazine.bulletList
+            bullets.forEachIndexed { bulletIndex, bulletType ->
+                if (bulletIndex < magazine.capacity) {
+                    val bulletX = magX + magWidth / 2 - 8
+                    val bulletY = magY + innerPadding + 8 + bulletIndex * bulletTotalHeight + bulletHeight / 2
+                    
+                    // Check if mouse is over this bullet
+                    val hitLeft = bulletX - bulletWidth / 2 - 5
+                    val hitRight = bulletX + bulletWidth / 2 + 20
+                    val hitBottom = bulletY - bulletHeight / 2 - 3
+                    val hitTop = bulletY + bulletHeight / 2 + 3
+                    
+                    if (mouseX >= hitLeft && mouseX <= hitRight && mouseY >= hitBottom && mouseY <= hitTop) {
+                        hoveredBullet = bulletType
+                        tooltipX = mouseX + 15
+                        tooltipY = mouseY + 10
+                    }
+                }
+            }
+        }
+    }
+    
+    private fun drawTooltip(renderer: ShapeRenderer, bullet: BulletType) {
+        val lines = buildTooltipLines(bullet)
+        val lineHeight = 14f
+        val padding = 8f
+        
+        // Calculate tooltip size
+        var maxWidth = 0f
+        lines.forEach { line ->
+            glyphLayout.setText(tooltipFont, line)
+            if (glyphLayout.width > maxWidth) maxWidth = glyphLayout.width
+        }
+        
+        val tooltipWidth = maxWidth + padding * 2
+        val tooltipHeight = lines.size * lineHeight + padding * 2
+        
+        // Adjust position to keep tooltip on screen
+        var drawX = tooltipX
+        var drawY = tooltipY
+        if (drawX + tooltipWidth > 1280f) drawX = 1280f - tooltipWidth - 5
+        if (drawY + tooltipHeight > 720f) drawY = 720f - tooltipHeight - 5
+        
+        // Draw tooltip background
+        renderer.begin(ShapeRenderer.ShapeType.Filled)
+        renderer.color = Color(0.1f, 0.1f, 0.15f, 0.95f)
+        renderer.rect(drawX, drawY, tooltipWidth, tooltipHeight)
+        
+        // Draw bullet color indicator
+        renderer.color = bullet.color
+        renderer.rect(drawX + 3, drawY + tooltipHeight - padding - 10, 4f, 12f)
+        
+        renderer.end()
+        
+        // Draw tooltip border
+        renderer.begin(ShapeRenderer.ShapeType.Line)
+        renderer.color = Color(0.4f, 0.4f, 0.5f, 1f)
+        renderer.rect(drawX, drawY, tooltipWidth, tooltipHeight)
+        renderer.end()
+        
+        // Draw tooltip text
+        spriteBatch.begin()
+        tooltipFont.color = Color.WHITE
+        
+        lines.forEachIndexed { index, line ->
+            val textY = drawY + tooltipHeight - padding - index * lineHeight
+            val textX = if (index == 0) drawX + padding + 8 else drawX + padding
+            
+            // Color code certain values
+            when {
+                line.contains("DMG") -> tooltipFont.color = Color(1f, 0.7f, 0.7f, 1f)
+                line.contains("SPD") -> tooltipFont.color = Color(0.7f, 0.9f, 1f, 1f)
+                line.contains("RLD") -> tooltipFont.color = Color(1f, 0.9f, 0.6f, 1f)
+                line.contains("ARR") -> tooltipFont.color = Color(0.7f, 0.8f, 1f, 1f)
+                line.contains("Effect") -> tooltipFont.color = Color(0.9f, 0.7f, 1f, 1f)
+                line.contains("Element") -> tooltipFont.color = Color(0.7f, 1f, 0.8f, 1f)
+                else -> tooltipFont.color = Color.WHITE
+            }
+            
+            tooltipFont.draw(spriteBatch, line, textX, textY)
+        }
+        
+        spriteBatch.end()
+    }
+    
+    private fun buildTooltipLines(bullet: BulletType): List<String> {
+        val lines = mutableListOf<String>()
+        
+        lines.add(bullet.name)
+        lines.add("DMG: ${bullet.damage.toInt()}")
+        lines.add("SPD: ${bullet.speed.toInt()}")
+        lines.add("RLD: ${String.format("%.2f", bullet.reloadTime)}s")
+        lines.add("ARR: ${String.format("%.2f", bullet.rearrangeTime)}s")
+        
+        if (bullet.splashDamage > 0) {
+            lines.add("Splash: ${bullet.splashDamage.toInt()}")
+        }
+        
+        bullet.statusEffect?.let {
+            lines.add("Effect: ${it.name.lowercase().replaceFirstChar { c -> c.uppercase() }}")
+        }
+        
+        bullet.element?.let {
+            lines.add("Element: ${it.name.lowercase().replaceFirstChar { c -> c.uppercase() }}")
+        }
+        
+        val uses = when {
+            bullet.isInfinite -> "∞"
+            else -> "${bullet.usesRemaining}"
+        }
+        lines.add("Uses: $uses")
+        
+        return lines
     }
     
     private fun drawUsesText(bulletType: BulletType, x: Float, y: Float) {
@@ -95,7 +242,9 @@ class MagazineUI {
         magazine: Magazine,
         x: Float,
         y: Float,
-        isSelected: Boolean
+        isSelected: Boolean,
+        mouseX: Float,
+        mouseY: Float
     ) {
         val bgColor = if (isSelected) {
             Color(magazine.color.r * 0.8f, magazine.color.g * 0.8f, magazine.color.b * 0.8f, 1f)
@@ -118,7 +267,26 @@ class MagazineUI {
                 val bulletY = y + innerPadding + 8 + index * bulletTotalHeight + bulletHeight / 2
                 
                 val isTop = index == bullets.lastIndex
-                val brightness = if (isTop) 1f else 0.7f
+                
+                // Check if this bullet is hovered
+                val isHovered = hoveredBullet == bulletType && 
+                    mouseX >= bulletX - bulletWidth / 2 - 5 && 
+                    mouseX <= bulletX + bulletWidth / 2 + 20 &&
+                    mouseY >= bulletY - bulletHeight / 2 - 3 && 
+                    mouseY <= bulletY + bulletHeight / 2 + 3
+                
+                val brightness = when {
+                    isHovered -> 1.2f
+                    isTop -> 1f
+                    else -> 0.7f
+                }
+                
+                // Draw highlight behind hovered bullet
+                if (isHovered) {
+                    renderer.color = Color(1f, 1f, 1f, 0.15f)
+                    renderer.rect(bulletX - bulletWidth / 2 - 3, bulletY - bulletHeight / 2 - 2, 
+                                  bulletWidth + 25, bulletHeight + 4)
+                }
                 
                 drawBulletShape(renderer, bulletType, bulletX, bulletY, brightness)
             }
@@ -160,9 +328,9 @@ class MagazineUI {
         brightness: Float
     ) {
         val color = Color(
-            bulletType.color.r * brightness,
-            bulletType.color.g * brightness,
-            bulletType.color.b * brightness,
+            (bulletType.color.r * brightness).coerceAtMost(1f),
+            (bulletType.color.g * brightness).coerceAtMost(1f),
+            (bulletType.color.b * brightness).coerceAtMost(1f),
             1f
         )
         renderer.color = color
@@ -175,7 +343,7 @@ class MagazineUI {
             }
             BulletDisplayShape.LONG -> {
                 renderer.rect(x - bulletWidth / 2, y - bulletHeight / 2, bulletWidth - 8, bulletHeight)
-                renderer.color = Color(color.r * 1.2f, color.g * 1.2f, color.b * 0.8f, 1f)
+                renderer.color = Color((color.r * 1.2f).coerceAtMost(1f), (color.g * 1.2f).coerceAtMost(1f), color.b * 0.8f, 1f)
                 renderer.triangle(
                     x + bulletWidth / 2 - 8, y - bulletHeight / 2,
                     x + bulletWidth / 2 - 8, y + bulletHeight / 2,
@@ -194,19 +362,19 @@ class MagazineUI {
                 renderer.rect(x - bulletWidth / 2 + 6, y - bulletHeight / 2, bulletWidth - 12, bulletHeight)
                 renderer.circle(x - bulletWidth / 2 + 6, y, bulletHeight / 2)
                 renderer.circle(x + bulletWidth / 2 - 6, y, bulletHeight / 2)
-                renderer.color = Color(1f, 0.8f, 0.2f, brightness)
+                renderer.color = Color(1f, 0.8f, 0.2f, brightness.coerceAtMost(1f))
                 renderer.circle(x + bulletWidth / 2 - 3, y - 4, 4f)
                 renderer.circle(x + bulletWidth / 2, y + 3, 3f)
-                renderer.color = Color(1f, 0.3f, 0.1f, brightness)
+                renderer.color = Color(1f, 0.3f, 0.1f, brightness.coerceAtMost(1f))
                 renderer.circle(x + bulletWidth / 2 + 4, y, 3f)
             }
             BulletDisplayShape.ICE -> {
                 renderer.rect(x - bulletWidth / 2 + 6, y - bulletHeight / 2, bulletWidth - 12, bulletHeight)
                 renderer.circle(x - bulletWidth / 2 + 6, y, bulletHeight / 2)
                 renderer.circle(x + bulletWidth / 2 - 6, y, bulletHeight / 2)
-                renderer.color = Color(0.9f, 0.95f, 1f, brightness)
+                renderer.color = Color(0.9f, 0.95f, 1f, brightness.coerceAtMost(1f))
                 renderer.circle(x, y, 4f)
-                renderer.color = Color(0.7f, 0.9f, 1f, brightness * 0.8f)
+                renderer.color = Color(0.7f, 0.9f, 1f, (brightness * 0.8f).coerceAtMost(1f))
                 renderer.rect(x - 3, y - bulletHeight / 2 - 4, 6f, 4f)
                 renderer.rect(x - 3, y + bulletHeight / 2, 6f, 4f)
             }
@@ -214,7 +382,7 @@ class MagazineUI {
                 renderer.rect(x - bulletWidth / 2 + 6, y - bulletHeight / 2, bulletWidth - 12, bulletHeight)
                 renderer.circle(x - bulletWidth / 2 + 6, y, bulletHeight / 2)
                 renderer.circle(x + bulletWidth / 2 - 6, y, bulletHeight / 2)
-                renderer.color = Color(1f, 1f, 1f, brightness * 0.7f)
+                renderer.color = Color(1f, 1f, 1f, (brightness * 0.7f).coerceAtMost(1f))
                 renderer.circle(x, y, 5f)
                 renderer.color = color
                 renderer.circle(x - 10, y, 4f)
@@ -226,5 +394,6 @@ class MagazineUI {
     fun dispose() {
         spriteBatch.dispose()
         font.dispose()
+        tooltipFont.dispose()
     }
 }
